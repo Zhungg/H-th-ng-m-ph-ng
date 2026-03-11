@@ -1,0 +1,123 @@
+% ==========================================
+% GIAI ĐOẠN 1: BỘ PHÁT TÍN HIỆU (TRANSMITTER)
+% ==========================================
+
+% --- 1. THÔNG SỐ HỆ THỐNG ---
+M = 16;                     % Bậc điều chế 16-QAM
+k = log2(M);                % Số bit trên mỗi symbol
+numBits = 10000;            % Tổng số bit cần truyền
+numSymbols = numBits / k;   % Tổng số symbol
+
+% Thông số bộ lọc định hình xung (Root Raised Cosine)
+sps = 4;                    % Số mẫu trên một symbol (Samples per symbol)
+rollOff = 0.25;             % Hệ số uốn (Roll-off factor)
+span = 6;                   % Chiều dài bộ lọc (tính bằng số symbol)
+
+% --- 2. TẠO NGUỒN DỮ LIỆU ---
+% Tạo chuỗi bit ngẫu nhiên (0 và 1)
+dataIn = randi([0 1], numBits, 1); 
+
+% --- 3. ĐIỀU CHẾ SỐ (16-QAM) ---
+% Gom nhóm k bit thành một số nguyên (từ 0 đến M-1)
+dataSym = bit2int(dataIn, k); 
+% Ánh xạ các số nguyên lên mặt phẳng phức (I-Q)
+txSig = qammod(dataSym, M); 
+
+% --- 4. BỘ LỌC ĐỊNH HÌNH XUNG (PULSE SHAPING FILTER) ---
+% Thiết kế bộ lọc Root Raised Cosine (RRC)
+rrcFilter = rcosdesign(rollOff, span, sps, 'sqrt');
+
+% Tăng tốc độ lấy mẫu (Upsample) và cho tín hiệu đi qua bộ lọc
+txSigFiltered = upfirdn(txSig, rrcFilter, sps);
+
+% ==========================================
+% GIAI ĐOẠN 1.5: TRỰC QUAN HÓA TÍN HIỆU PHÁT
+% ==========================================
+
+% --- 1. BIỂU ĐỒ CHÒM SAO (CONSTELLATION DIAGRAM) ---
+
+% Vẽ chòm sao gốc (Raw 16-QAM symbols)
+% Đây là các điểm lý tưởng, chưa bị tác động bởi bộ lọc hay nhiễu
+scatterplot(txSig);
+title('Biểu đồ chòm sao 16-QAM Lý tưởng (Trước bộ lọc)');
+grid on;
+
+% Vẽ quỹ đạo tín hiệu sau khi qua bộ lọc (Signal Trajectory)
+% Lưu ý: Bỏ qua các phần tử trễ ở đầu và cuối do bộ lọc (span*sps) tạo ra
+% Tham số sps giúp hiển thị đúng các điểm lấy mẫu
+scatterplot(txSigFiltered(span*sps+1 : end-span*sps), sps, 0); 
+title('Quỹ đạo tín hiệu 16-QAM (Sau khi qua bộ lọc RRC)');
+grid on;
+
+
+% --- 2. MẬT ĐỘ PHỔ CÔNG SUẤT (POWER SPECTRAL DENSITY - PSD) ---
+
+% Giả sử tần số lấy mẫu Fs = 1000 Hz (để minh họa trục tần số)
+Fs = 1000; 
+
+% Sử dụng hàm pwelch để ước lượng mật độ phổ công suất
+figure;
+[pxx, f] = pwelch(txSigFiltered, 500, 300, 512, Fs, 'centered');
+
+% Vẽ phổ trên thang đo dB
+plot(f, 10*log10(pxx), 'LineWidth', 1.5, 'Color', 'b');
+title('Mật độ phổ công suất (PSD) của tín hiệu phát');
+xlabel('Tần số (Hz)');
+ylabel('Mật độ công suất (dB/Hz)');
+grid on;
+axis([-Fs/2 Fs/2 -100 0]); % Giới hạn trục hiển thị cho dễ nhìn
+
+
+
+% ==========================================
+% GIAI ĐOẠN 2: KÊNH TRUYỀN & MÁY THU (RECEIVER)
+% ==========================================
+
+% --- 1. MÔ PHỎNG KÊNH TRUYỀN AWGN ---
+EbNo = 10; % Tỷ số Năng lượng bit trên Mật độ nhiễu (dB)
+
+% Chuyển đổi Eb/N0 sang SNR thực tế của tín hiệu đã lấy mẫu
+% Công thức: SNR = Eb/N0 + 10*log10(k) - 10*log10(sps)
+snr = EbNo + 10*log10(k) - 10*log10(sps);
+
+% Cho tín hiệu đi qua kênh truyền (thêm nhiễu AWGN)
+rxSig = awgn(txSigFiltered, snr, 'measured');
+
+% --- 2. BỘ LỌC THU (MATCHED FILTER) & LẤY MẪU XUỐNG ---
+% Đi qua bộ lọc phối hợp (giống hệt bộ lọc phát) và downsample
+rxSigFiltered = upfirdn(rxSig, rrcFilter, 1, sps);
+
+% Xử lý trễ do bộ lọc (Filter Delay)
+% Tổng trễ của cả hệ thống (phát + thu) là bằng 'span' (số symbol)
+rxSym = rxSigFiltered(span+1 : end-span);
+
+% --- 3. GIẢI ĐIỀU CHẾ & TÍNH TỶ LỆ LỖI BIT (BER) ---
+% Giải điều chế 16-QAM (Từ mặt phẳng phức về số nguyên)
+dataOutSym = qamdemod(rxSym, M);
+
+% Chuyển số nguyên về lại chuỗi bit ban đầu
+dataOut = int2bit(dataOutSym, k);
+
+% So sánh đầu vào và đầu ra để tính BER
+[numErrors, ber] = biterr(dataIn, dataOut);
+
+% In kết quả ra Command Window
+fprintf('--- KẾT QUẢ MÔ PHỎNG ---\n');
+fprintf('Eb/N0 = %d dB\n', EbNo);
+fprintf('Số bit lỗi = %d\n', numErrors);
+fprintf('Tỷ lệ lỗi bit (BER) = %e\n', ber);
+
+
+% ==========================================
+% GIAI ĐOẠN 2.5: TRỰC QUAN HÓA PHÍA THU
+% ==========================================
+
+% Biểu đồ chòm sao tại Anten thu (Đầy nhiễu)
+scatterplot(rxSig(1:1000)); % Vẽ 1000 điểm cho đỡ nặng máy
+title('Tín hiệu tại Anten thu (Có nhiễu AWGN)');
+grid on;
+
+% Biểu đồ chòm sao sau khi qua Bộ lọc thu (Đã sạch nhiễu và gom cụm)
+scatterplot(rxSym);
+title('Tín hiệu sau Bộ lọc thu (Matched Filter)');
+grid on;
